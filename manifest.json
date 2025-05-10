@@ -1,0 +1,10 @@
+{
+  "id": "artifacting",
+  "name": "Artifacting",
+  "version": "0.1.0",
+  "minAppVersion": "1.0.0",
+  "description": "Plugin to index, search, and manage AI-generated artifacts like Loomsidian data.",
+  "author": "Lari & Gemini",
+  "authorUrl": "",
+  "isDesktopOnly": false
+} 
