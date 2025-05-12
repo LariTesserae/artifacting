@@ -1,1 +1,19 @@
 /* Styles for the Artifacting plugin */ 
+
+/* 
+   Attempt to make Obsidian notices theme-aware.
+   This will affect ALL notices in Obsidian, not just from this plugin,
+   as the new Notice() API doesn't allow easy custom class injection.
+*/
+.notice {
+    background-color: var(--background-secondary, #f0f0f0); /* Fallback for light themes if variable not found */
+    color: var(--text-normal, #1a1a1a); /* Fallback for light themes if variable not found */
+    border: 1px solid var(--background-modifier-border, #e0e0e0); /* Optional theme-aware border */
+    /* For dark themes, these variables will automatically have darker/lighter values */
+}
+
+/* A more specific approach if we could add a class (we can't easily with new Notice) */
+/* .artifacting-plugin-notice { 
+    background-color: var(--background-secondary);
+    color: var(--text-normal);
+} */ 
