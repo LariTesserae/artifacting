@@ -39,7 +39,8 @@ var DEFAULT_SETTINGS = {
   enableDailyLoomBackupCheck: true,
   dailyLoomBackupCheckTime: "06:00",
   enableNewScreenshotTag: true,
-  newScreenshotTagName: "new_artifact"
+  newScreenshotTagName: "new_artifact",
+  loomExportsFolderPath: "Artifacts/LoomExports"
 };
 function getTextExtractorApi(app) {
   var _a, _b, _c;
@@ -193,7 +194,32 @@ var LoomSearchModal = class extends import_obsidian.SuggestModal {
     return this.plugin.searchLoomIndex(query);
   }
   renderSuggestion(node, el) {
-    el.createEl("div", { text: node.text.substring(0, 100) + (node.text.length > 100 ? "..." : "") });
+    const query = this.inputEl.value.toLowerCase();
+    let textSnippet = node.text.substring(0, 100) + (node.text.length > 100 ? "..." : "");
+    const textEl = el.createDiv();
+    if (query && node.text) {
+      const nodeTextLower = node.text.toLowerCase();
+      const matchIndex = nodeTextLower.indexOf(query);
+      const snippetRadius = 60;
+      if (matchIndex !== -1) {
+        const startIndex = Math.max(0, matchIndex - snippetRadius);
+        const endIndex = Math.min(node.text.length, matchIndex + query.length + snippetRadius);
+        let prefix = startIndex > 0 ? "..." : "";
+        let suffix = endIndex < node.text.length ? "..." : "";
+        const rawSnippet = node.text.substring(startIndex, endIndex);
+        const matchInSnippetIndex = rawSnippet.toLowerCase().indexOf(query);
+        if (matchInSnippetIndex !== -1) {
+          const highlightedSnippet = rawSnippet.substring(0, matchInSnippetIndex) + `<mark>${rawSnippet.substring(matchInSnippetIndex, matchInSnippetIndex + query.length)}</mark>` + rawSnippet.substring(matchInSnippetIndex + query.length);
+          textEl.innerHTML = prefix + highlightedSnippet + suffix;
+        } else {
+          textEl.setText(prefix + rawSnippet + suffix);
+        }
+      } else {
+        textEl.setText(textSnippet);
+      }
+    } else {
+      textEl.setText(textSnippet);
+    }
     el.createEl("small", { text: node.documentPath, cls: "loom-search-result-path" });
   }
   async onChooseSuggestion(node, evt) {
@@ -369,6 +395,11 @@ var ArtifactingSettingTab = class extends import_obsidian.PluginSettingTab {
         }
       }));
     }
+    containerEl.createEl("h3", { text: "Loom Export Settings" });
+    new import_obsidian.Setting(containerEl).setName("Loom Exports Folder Path").setDesc("Folder where exported Loomsidian segments (JSON and MD files) will be saved.").addText((text) => text.setPlaceholder("Example: Artifacts/LoomExports").setValue(this.plugin.settings.loomExportsFolderPath).onChange(async (value) => {
+      this.plugin.settings.loomExportsFolderPath = (0, import_obsidian.normalizePath)(value);
+      await this.plugin.savePluginSettings();
+    }));
   }
 };
 var LOOM_DATA_PATH = ".obsidian/plugins/loom/data.json";
@@ -469,6 +500,20 @@ var Artifacting = class extends import_obsidian.Plugin {
         await this.triggerLoomBackupCheck(true);
       }
     });
+    this.addCommand({
+      id: "export-active-document-loom",
+      name: "Export active document's Loom to standalone artifact",
+      checkCallback: (checking) => {
+        const activeFile = this.app.workspace.getActiveFile();
+        if (activeFile && activeFile.extension === "md") {
+          if (!checking) {
+            this.exportFullLoomForDocument(activeFile);
+          }
+          return true;
+        }
+        return false;
+      }
+    });
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file, source) => {
         if (source === "file-explorer-context-menu") {
@@ -515,7 +560,8 @@ var Artifacting = class extends import_obsidian.Plugin {
         enableDailyLoomBackupCheck: typeof loadedData.enableDailyLoomBackupCheck === "boolean" ? loadedData.enableDailyLoomBackupCheck : DEFAULT_SETTINGS.enableDailyLoomBackupCheck,
         dailyLoomBackupCheckTime: loadedData.dailyLoomBackupCheckTime || DEFAULT_SETTINGS.dailyLoomBackupCheckTime,
         enableNewScreenshotTag: typeof loadedData.enableNewScreenshotTag === "boolean" ? loadedData.enableNewScreenshotTag : DEFAULT_SETTINGS.enableNewScreenshotTag,
-        newScreenshotTagName: loadedData.newScreenshotTagName || DEFAULT_SETTINGS.newScreenshotTagName
+        newScreenshotTagName: loadedData.newScreenshotTagName || DEFAULT_SETTINGS.newScreenshotTagName,
+        loomExportsFolderPath: loadedData.loomExportsFolderPath || DEFAULT_SETTINGS.loomExportsFolderPath
       };
       this.index = loadedData.loomIndex || {};
       this.screenshotIndex = loadedData.screenshotIndex || {};
@@ -590,10 +636,11 @@ var Artifacting = class extends import_obsidian.Plugin {
       if (shouldOcr && textExtractor.canFileBeExtracted(imageFile.path)) {
         try {
           const ocrTextResult = await textExtractor.extractText(imageFile);
+          console.log(`[RAW OCR - indexAllImagesOCR for ${imageFile.path}] Raw result type: ${typeof ocrTextResult}, Length: ${ocrTextResult == null ? void 0 : ocrTextResult.length}`);
+          console.log(`[RAW OCR - indexAllImagesOCR for ${imageFile.path}] First 500 chars:`, ocrTextResult == null ? void 0 : ocrTextResult.substring(0, 500));
           existingEntry.ocrText = ocrTextResult && ocrTextResult.trim().length > 0 ? ocrTextResult.trim() : null;
           existingEntry.ocrError = null;
           newlyOcrCount++;
-          console.log(`  OCR success for ${imageFile.path}. Length: ${ocrTextResult ? ocrTextResult.length : 0}`);
         } catch (err) {
           console.error(`  Text Extractor failed for ${imageFile.path}:`, err);
           existingEntry.ocrError = err.message || "Unknown OCR error during scan";
@@ -792,6 +839,8 @@ ${embedLink}
       if (textExtractor.canFileBeExtracted(imageFile.path)) {
         try {
           const ocrTextResult = await textExtractor.extractText(imageFile);
+          console.log(`[RAW OCR - batchOcrAndUpdateIndex for ${imagePath}] Raw result type: ${typeof ocrTextResult}, Length: ${ocrTextResult == null ? void 0 : ocrTextResult.length}`);
+          console.log(`[RAW OCR - batchOcrAndUpdateIndex for ${imagePath}] First 500 chars:`, ocrTextResult == null ? void 0 : ocrTextResult.substring(0, 500));
           if (this.screenshotIndex[imagePath]) {
             this.screenshotIndex[imagePath].ocrText = ocrTextResult && ocrTextResult.trim().length > 0 ? ocrTextResult.trim() : null;
             this.screenshotIndex[imagePath].ocrError = null;
@@ -895,6 +944,8 @@ ${embedLink}
           new import_obsidian.Notice(`Extracting text from pasted image ${savedImageFile.name}...`);
           console.log(`Starting OCR for pasted image ${savedImageFile.path} via Text Extractor...`);
           ocrText = await textExtractor.extractText(savedImageFile);
+          console.log(`[RAW OCR - handlePasteFromClipboard for ${savedImageFile.path}] Raw result type: ${typeof ocrText}, Length: ${ocrText == null ? void 0 : ocrText.length}`);
+          console.log(`[RAW OCR - handlePasteFromClipboard for ${savedImageFile.path}] First 500 chars:`, ocrText == null ? void 0 : ocrText.substring(0, 500));
           console.log(`Text Extractor successful for ${savedImageFile.path}. Length: ${ocrText ? ocrText.length : 0}`);
           if (ocrText && ocrText.trim().length > 0) {
             new import_obsidian.Notice(`Text extracted from pasted image.`);
@@ -1054,6 +1105,8 @@ ${sourceNotePaths.map((p) => `  - "${p}"`).join("\n")}
           try {
             new import_obsidian.Notice(`Extracting text from ${file.name}...`);
             ocrText = await textExtractor.extractText(file);
+            console.log(`[RAW OCR - handleCreateNoteForFile for ${file.path}] Raw result type: ${typeof ocrText}, Length: ${ocrText == null ? void 0 : ocrText.length}`);
+            console.log(`[RAW OCR - handleCreateNoteForFile for ${file.path}] First 500 chars:`, ocrText == null ? void 0 : ocrText.substring(0, 500));
             if (ocrText && ocrText.trim().length > 0) {
               new import_obsidian.Notice(`Text extracted from ${file.name}.`);
             } else {
@@ -1301,5 +1354,86 @@ ${sourceNotePaths.map((p) => `  - "${p}"`).join("\n")}
       }
     }, delayUntilNextCheck);
   }
-  // ... (rest of the methods: getTextExtractor, indexAllImagesOCR, createNoteAndIndexScreenshot, etc.) ...
+  async exportFullLoomForDocument(docFile) {
+    console.log(`Attempting to export full Loom for document: ${docFile.path}`);
+    new import_obsidian.Notice(`Exporting Loom data for ${docFile.basename}...`, 3e3);
+    const loomData = await this.readLoomData();
+    if (!loomData || !loomData.state || !loomData.state[docFile.path]) {
+      new import_obsidian.Notice(`No Loomsidian data found for ${docFile.path}. Cannot export.`);
+      console.warn(`No Loomsidian data found for ${docFile.path}.`);
+      return;
+    }
+    const noteState = loomData.state[docFile.path];
+    if (!noteState.nodes || Object.keys(noteState.nodes).length === 0) {
+      new import_obsidian.Notice(`No nodes found in Loomsidian data for ${docFile.path}. Cannot export.`);
+      console.warn(`No nodes found in Loomsidian data for ${docFile.path}.`);
+      return;
+    }
+    const exportFolderRelPath = (0, import_obsidian.normalizePath)(this.settings.loomExportsFolderPath);
+    try {
+      const exportFolder = this.app.vault.getAbstractFileByPath(exportFolderRelPath);
+      if (!(exportFolder instanceof import_obsidian.TFolder)) {
+        await this.app.vault.createFolder(exportFolderRelPath);
+        console.log(`Created Loom export folder: ${exportFolderRelPath}`);
+      }
+    } catch (err) {
+      new import_obsidian.Notice(`Failed to create Loom export folder: ${exportFolderRelPath}. Cannot export.`);
+      console.error(`Failed to create Loom export folder ${exportFolderRelPath}:`, err);
+      return;
+    }
+    const baseName = docFile.basename;
+    const jsonExportName = `${baseName}.loomartifact.json`;
+    const mdExportName = `${baseName}.loomartifact.md`;
+    const jsonExportPath = (0, import_obsidian.normalizePath)(`${exportFolderRelPath}/${jsonExportName}`);
+    const mdExportPath = (0, import_obsidian.normalizePath)(`${exportFolderRelPath}/${mdExportName}`);
+    const exportJsonData = {
+      current: noteState.current,
+      // The current node ID from the original loom for this doc
+      nodes: noteState.nodes
+      // The complete set of nodes for this document's loom
+    };
+    try {
+      await this.app.vault.create(jsonExportPath, JSON.stringify(exportJsonData, null, 2));
+      console.log(`Exported Loom JSON data to: ${jsonExportPath}`);
+    } catch (err) {
+      new import_obsidian.Notice(`Failed to export Loom JSON data to ${jsonExportPath}. See console.`);
+      console.error(`Failed to export Loom JSON data to ${jsonExportPath}:`, err);
+      return;
+    }
+    let currentPathText = "(Could not reconstruct current path for exported loom)";
+    if (exportJsonData.current && exportJsonData.nodes) {
+      let text = "";
+      let currentId = exportJsonData.current;
+      const nodesMap = exportJsonData.nodes;
+      while (currentId) {
+        const node = nodesMap[currentId];
+        if (node && typeof node.text === "string") {
+          text = node.text + text;
+          currentId = node.parentId;
+        } else {
+          console.warn(`Node ${currentId} not found or text missing during MD export reconstruction.`);
+          currentId = null;
+        }
+      }
+      currentPathText = text;
+    }
+    const mdFrontmatter = `---
+artifactType: loom-export
+loomDataFile: "./${jsonExportName}"
+exportedDate: ${(/* @__PURE__ */ new Date()).toISOString()}
+originalDocPath: "${docFile.path}"
+originalCurrentNodeId: "${noteState.current || ""}"
+---
+
+`;
+    const mdContent = mdFrontmatter + currentPathText;
+    try {
+      await this.app.vault.create(mdExportPath, mdContent);
+      console.log(`Exported Loom Markdown to: ${mdExportPath}`);
+      new import_obsidian.Notice(`Successfully exported Loom for ${docFile.basename} to ${exportFolderRelPath}.`, 0);
+    } catch (err) {
+      new import_obsidian.Notice(`Failed to export Loom Markdown to ${mdExportPath}. JSON data was saved. See console.`);
+      console.error(`Failed to export Loom Markdown to ${mdExportPath}:`, err);
+    }
+  }
 };
